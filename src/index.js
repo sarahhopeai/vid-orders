@@ -43,12 +43,12 @@ const FLOW4_PRICING = {
   dot_drug_test:          { amount: 69,  name: 'DOT Drug Test',                    tazworks: true,  taz_type: 'dot_drug' },
   dot_alcohol_test:       { amount: 59,  name: 'DOT Breath Alcohol Test',          tazworks: true,  taz_type: 'dot_alcohol' },
   mvr:                    { amount: 25,  name: 'Motor Vehicle Record (MVR)',        tazworks: true,  taz_type: 'mvr' },
-  psp_report:             { amount: 15,  name: 'PSP Report',                       tazworks: true,  taz_type: 'psp_report' },
-  background_check:       { amount: 45,  name: 'Background Check',                 tazworks: true,  taz_type: 'background_check' },
+  psp_report:             { amount: 20,  name: 'PSP Report',                       tazworks: true,  taz_type: 'psp_report' },
+  background_check:       { amount: 39,  name: 'Background Check',                 tazworks: true,  taz_type: 'background_check' },
   background_check_driving: { amount: 65, name: 'Background Check + Driving',      tazworks: true,  taz_type: 'background_check_driving' },
   dot_drug_clearmd_pe:    { amount: 69,  name: 'DOT Drug Test (ClearMD) - Pre-Employment', tazworks: true, taz_type: 'dot_drug_clearmd_pe' },
   dot_drug_clearmd_random: { amount: 69, name: 'DOT Drug Test (ClearMD) - Random', tazworks: true,  taz_type: 'dot_drug_clearmd_random' },
-  clearinghouse_query:    { amount: 15,  name: 'Clearinghouse Query',              tazworks: false },
+  clearinghouse_query:    { amount: 12,  name: 'Clearinghouse Query',              tazworks: false },
 };
 
 // ── Twilio / OTP ─────────────────────────────────────────────────────────────
@@ -1860,18 +1860,46 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
 
-    // Handle GET endpoints (authnet-config)
+    // Handle GET endpoints
     if (request.method === 'GET' && path === '/authnet-config') {
       try {
         const vault = await loadVault(env);
         return jsonResponse({
           apiLoginId: vault['Authorize.net/Authorize.net/AUTHNET_LOGIN_ID'],
-          clientKey: vault['Authorize.net/Authorize.net/AUTHNET_CLIENT_KEY'],
+          clientKey: vault['Authorize.net/Authorize.net/public_client_key'],
         }, 200, request);
       } catch (e) {
         console.log(`[authnet-config] vault load failed: ${e.message}`);
         return jsonResponse({ error: 'Configuration unavailable' }, 500, request);
       }
+    }
+
+    // Public pricing endpoint — single source of truth for all frontends
+    if (request.method === 'GET' && path === '/prices') {
+      return new Response(JSON.stringify({
+        pre_employment:       { name: 'DOT Pre-Employment Drug Test', price: FLOW1_PRICING.pre_employment.amount },
+        random:               { name: 'DOT Random Drug Test', price: FLOW1_PRICING.random.amount },
+        post_accident:        { name: 'DOT Post-Accident Drug Test', price: FLOW1_PRICING.post_accident.amount },
+        reasonable_suspicion:  { name: 'DOT Reasonable Suspicion Drug Test', price: FLOW1_PRICING.reasonable_suspicion.amount },
+        return_to_duty:       { name: 'DOT Return-to-Duty Drug Test', price: FLOW1_PRICING.return_to_duty.amount },
+        follow_up:            { name: 'DOT Follow-Up Drug Test', price: FLOW1_PRICING.follow_up.amount },
+        dot_alcohol:          { name: 'DOT Breath Alcohol Test', price: FLOW1_PRICING.dot_alcohol.amount },
+        dot_combo:            { name: 'DOT Drug and Breath Alcohol Test', price: FLOW1_PRICING.pre_employment.amount + FLOW1_PRICING.dot_alcohol.amount },
+        plan_single:          { name: 'FMCSA Single Owner Operator', price: ENROLL_PLAN_PRICING.single.base },
+        plan_fleet:           { name: 'FMCSA Fleet Plan', price: ENROLL_PLAN_PRICING.fleet_295.base },
+        add_driver:           { name: 'Additional Driver', price: ENROLL_PLAN_PRICING.fleet.per_driver },
+        add_driver_account:   { name: 'Add Driver to Consortium', price: ADD_DRIVER_PRICE },
+        clearinghouse_setup:  { name: 'Clearinghouse Setup Assistance', price: 199 },
+        fmcsa_policy:         { name: 'FMCSA Drug and Alcohol Policy', price: 39 },
+        boc3:                 { name: 'FMCSA BOC-3', price: 59 },
+        ucr:                  { name: 'UCR Filing', price: 129 },
+        pedt_upsell:          { name: 'Pre-Employment Drug Test', price: PEDT_PRICE },
+        chq_query:            { name: 'Clearinghouse Query Per Driver', price: FLOW4_PRICING.clearinghouse_query.amount },
+        psp:                  { name: 'PSP Record', price: FLOW4_PRICING.psp_report.amount },
+        background:           { name: 'Background Check', price: FLOW4_PRICING.background_check.amount },
+      }), {
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request), 'Cache-Control': 'public, max-age=300' },
+      });
     }
 
     // Only accept POST for remaining routes
@@ -1919,7 +1947,7 @@ export default {
       case '/order':
         return handleOrder(body, env, request);
       default:
-        return jsonResponse({ error: 'Not found', routes: ['/authnet-config', '/flow1', '/enroll', '/account', '/order'] }, 404, request);
+        return jsonResponse({ error: 'Not found', routes: ['/prices', '/authnet-config', '/flow1', '/enroll', '/account', '/order'] }, 404, request);
     }
   },
 };
