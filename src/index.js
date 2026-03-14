@@ -114,7 +114,7 @@ function corsHeaders(request) {
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
     'Access-Control-Allow-Origin': allowed,
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',
   };
@@ -194,7 +194,10 @@ async function chargeAuthNet(nonce, amount, orderDescription, customer, env) {
         billTo: {
           firstName: customer.first_name,
           lastName: customer.last_name,
-          zip: customer.zip_code,
+          address: customer.billing_address || '',
+          city: customer.billing_city || '',
+          state: customer.billing_state || '',
+          zip: customer.billing_zip || customer.zip_code || '',
         },
       },
     },
@@ -287,7 +290,7 @@ async function placeTazWorksOrder(applicantGuid, testType, reason, invoiceNumber
     clientProductGuid,
     certifyPermissiblePurpose: true,
     ...(invoiceNumber && { externalIdentifier: invoiceNumber }),
-    orderNotes: `${notePrefix} | ${testType.replace(/_/g, ' ').toUpperCase()} | Reason: ${reason.replace(/_/g, ' ').toUpperCase()} | ZIP: ${zipCode}`,
+    orderNotes: `${notePrefix} | ${testType.replace(/_/g, ' ').toUpperCase()} | Reason: ${reason.replace(/_/g, ' ').toUpperCase()} | ZIP: ${zipCode}${extraFields.dot_number ? ' | DOT: ' + extraFields.dot_number : ''}${extraFields.ip_address ? ' | IP: ' + extraFields.ip_address : ''}`,
     customFields: {
       field3: customerEmail, // "Send Report To"
       ...(extraFields.cdl_number && { field4: extraFields.cdl_number }),
@@ -333,6 +336,8 @@ async function createCrmCustomer(customer, token) {
       Primary_Contract_Email: customer.email,
       Client_Type: 'One-Time Order',
       Client_Status: 'Active',
+      ...(customer.dot_number && { DOT_CA_Number: customer.dot_number }),
+      Description: `Source: OrderLabTest.com | DOT#: ${customer.dot_number || 'not provided'} | IP: ${customer.ip_address || 'unknown'} | Date: ${new Date().toISOString()}`,
     }],
   };
 
@@ -947,11 +952,21 @@ async function handleFlow1(body, env, request) {
   // Determine the reason for TazWorks — for Flow 1, test_type maps directly to reason
   const reason = testType === 'dot_alcohol' ? 'reasonable_suspicion' : testType;
 
+  // Capture IP address from CF header
+  const ipAddress = request.headers.get('cf-connecting-ip') || '';
+
   // 2. Charge via Authorize.net
   console.log(`[flow1] charging $${pricing.amount} for ${pricing.name}`);
   const chargeResult = await chargeAuthNet(
     body.authnet_nonce, pricing.amount, pricing.name,
-    { email: body.email, first_name: body.first_name, last_name: body.last_name, zip_code: body.zip_code },
+    {
+      email: body.email, first_name: body.first_name, last_name: body.last_name,
+      zip_code: body.zip_code,
+      billing_address: body.billing_address || '',
+      billing_city: body.billing_city || '',
+      billing_state: body.billing_state || '',
+      billing_zip: body.billing_zip || body.zip_code,
+    },
     env
   );
 
@@ -970,7 +985,7 @@ async function handleFlow1(body, env, request) {
   // 3. Create Zoho CRM Customer (non-blocking — don't fail the order)
   let customerId = null;
   try {
-    customerId = await createCrmCustomer(body, token);
+    customerId = await createCrmCustomer({ ...body, ip_address: ipAddress }, token);
     console.log(`[flow1] CRM customer created: ${customerId}`);
   } catch (e) {
     console.log(`[flow1] CRM customer create error (non-blocking): ${e.message}`);
@@ -994,7 +1009,8 @@ async function handleFlow1(body, env, request) {
     console.log(`[flow1] TazWorks applicant created: ${applicantGuid}`);
     orderResult = await placeTazWorksOrder(
       applicantGuid, tazTestType, reason,
-      invoiceResult?.invoiceNumber || '', body.email, body.zip_code, env
+      invoiceResult?.invoiceNumber || '', body.email, body.zip_code, env,
+      'Flow 1 One-Time Order', { dot_number: body.dot_number || '', ip_address: ipAddress }
     );
     console.log(`[flow1] TazWorks order placed: ${orderResult.orderGuid} file=${orderResult.fileNumber}`);
   } catch (e) {
@@ -1844,7 +1860,21 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
 
-    // Only accept POST
+    // Handle GET endpoints (authnet-config)
+    if (request.method === 'GET' && path === '/authnet-config') {
+      try {
+        const vault = await loadVault(env);
+        return jsonResponse({
+          apiLoginId: vault['Authorize.net/Authorize.net/AUTHNET_LOGIN_ID'],
+          clientKey: vault['Authorize.net/Authorize.net/AUTHNET_CLIENT_KEY'],
+        }, 200, request);
+      } catch (e) {
+        console.log(`[authnet-config] vault load failed: ${e.message}`);
+        return jsonResponse({ error: 'Configuration unavailable' }, 500, request);
+      }
+    }
+
+    // Only accept POST for remaining routes
     if (request.method !== 'POST') {
       return jsonResponse({ error: 'Method not allowed' }, 405, request);
     }
@@ -1889,7 +1919,7 @@ export default {
       case '/order':
         return handleOrder(body, env, request);
       default:
-        return jsonResponse({ error: 'Not found', routes: ['/flow1', '/enroll', '/account', '/order'] }, 404, request);
+        return jsonResponse({ error: 'Not found', routes: ['/authnet-config', '/flow1', '/enroll', '/account', '/order'] }, 404, request);
     }
   },
 };
