@@ -818,32 +818,36 @@ async function lookupCustomerByDot(dotNumber, token) {
   const cleaned = dotNumber.toString().replace(/\D/g, '');
   if (!cleaned) return null;
 
-  // Try exact match first, then starts_with
+  // Try Customers module first, then Accounts fallback
+  // Records may exist in either module depending on which worker created them
+  const modules = [ZOHO_CRM_CUSTOMERS, 'https://www.zohoapis.com/crm/v7/Accounts/'];
   const strategies = [
     `(DOT_CA_Number:equals:${cleaned})`,
     `(DOT_CA_Number:starts_with:${cleaned})`,
   ];
 
-  for (const criteria of strategies) {
-    const url = `${ZOHO_CRM_CUSTOMERS}search?criteria=${encodeURIComponent(criteria)}`;
-    const res = await fetch(url, { headers: { Authorization: 'Zoho-oauthtoken ' + token } });
-    if (res.status === 204 || !res.ok) continue;
-    const data = await res.json();
-    if (data.data?.length > 0) {
-      const r = data.data[0];
-      return {
-        id: r.id,
-        company_name: r.Account_Name || '',
-        dot_number: r.DOT_CA_Number || '',
-        phone: r.Phone || r.Company_Phone || '',
-        email: r.Primary_Contract_Email || r.Email || '',
-        client_type: r.Client_Type || '',
-        client_status: r.Client_Status || '',
-        address: r.Mailing_Street || '',
-        city: r.Mailing_City || '',
-        state: r.Mailing_State || '',
-        zip: r.Mailing_Zip || '',
-      };
+  for (const base of modules) {
+    for (const criteria of strategies) {
+      const url = `${base}search?criteria=${encodeURIComponent(criteria)}`;
+      const res = await fetch(url, { headers: { Authorization: 'Zoho-oauthtoken ' + token } });
+      if (res.status === 204 || !res.ok) continue;
+      const data = await res.json();
+      if (data.data?.length > 0) {
+        const r = data.data[0];
+        return {
+          id: r.id,
+          company_name: r.Account_Name || '',
+          dot_number: r.DOT_CA_Number || '',
+          phone: r.Phone || r.Company_Phone || '',
+          email: r.Primary_Contract_Email || r.Email || '',
+          client_type: r.Client_Type || '',
+          client_status: r.Client_Status || '',
+          address: r.Mailing_Street || '',
+          city: r.Mailing_City || '',
+          state: r.Mailing_State || '',
+          zip: r.Mailing_Zip || '',
+        };
+      }
     }
   }
   return null;
